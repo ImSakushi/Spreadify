@@ -5,128 +5,106 @@ from PIL import Image
 
 def extract_cbz(cbz_path, extract_folder):
     """
-    Extracts the contents of a .cbz (zip format) file into a specified folder.
-    Returns a list of extracted image files (full paths).
+    Extrait le contenu d'un fichier .cbz (format zip) dans un dossier spécifié.
+    Retourne la liste des fichiers images extraits (chemins complets).
     """
     with zipfile.ZipFile(cbz_path, 'r') as zip_ref:
         zip_ref.extractall(extract_folder)
 
-    # Retrieve all extracted files
     extracted_files = []
     for root, dirs, files in os.walk(extract_folder):
         for file in files:
-            # Filter only image files
             if file.lower().endswith(('.png', '.jpg', '.jpeg')):
                 extracted_files.append(os.path.join(root, file))
 
-    # Sort them so the page order remains correct
     extracted_files.sort()
     return extracted_files
 
-def is_spread_candidate(image_path, border_size=5, white_threshold=250, black_threshold=20):
+def is_spread_candidate(image_path, border_size=5, white_threshold=250, black_threshold=20, black_border_ratio_threshold=0.45):
     """
-    Checks if, within the 'border_size' pixels on both the left and right edges of the image,
-    there are any NON-WHITE pixels (indicating a potential spread).
-
-    HOWEVER, if the entire left border OR the entire right border is COMPLETELY BLACK,
-    we consider it NOT a spread (e.g., flashback or stylistic black frame).
-
-    Returns:
-      - True if it potentially detects a spread.
-      - False otherwise.
+    Détermine si une image est candidate à la fusion en vérifiant ses bords.
+    Pour chaque bord (gauche et droit) :
+      - On vérifie qu'il existe au moins un pixel non blanc.
+      - Si plus de 'black_border_ratio_threshold' des pixels du bord sont noirs (i.e. avg <= black_threshold),
+        le bord est considéré comme majoritairement noir et l'image n'est pas candidate.
     """
     img = Image.open(image_path).convert('RGB')
     width, height = img.size
-    
-    # Flags to track pixel colors
-    left_border_has_black = False       # At least one non-white pixel on the left border
-    right_border_has_black = False      # At least one non-white pixel on the right border
-    left_border_all_black = True        # Is the entire left border completely black?
-    right_border_all_black = True       # Is the entire right border completely black?
-    
-    # --- Check the left border ---
+
+    # Bord gauche
+    left_border_has_nonwhite = False
+    left_black_count = 0
+    left_total = border_size * height
     for x in range(border_size):
         for y in range(height):
             r, g, b = img.getpixel((x, y))
             avg = (r + g + b) / 3
-            
-            # If we find a pixel that is not white, note that the left border has black
             if avg < white_threshold:
-                left_border_has_black = True
-            
-            # If we find a pixel that is not sufficiently black, it's not 100% black
-            if avg > black_threshold:
-                left_border_all_black = False
-    
-    # --- Check the right border ---
+                left_border_has_nonwhite = True
+            if avg <= black_threshold:
+                left_black_count += 1
+    left_black_ratio = left_black_count / left_total
+    left_border_mostly_black = left_black_ratio > black_border_ratio_threshold
+
+    # Bord droit
+    right_border_has_nonwhite = False
+    right_black_count = 0
+    right_total = border_size * height
     for x in range(width - border_size, width):
         for y in range(height):
             r, g, b = img.getpixel((x, y))
             avg = (r + g + b) / 3
-            
             if avg < white_threshold:
-                right_border_has_black = True
-            
-            if avg > black_threshold:
-                right_border_all_black = False
+                right_border_has_nonwhite = True
+            if avg <= black_threshold:
+                right_black_count += 1
+    right_black_ratio = right_black_count / right_total
+    right_border_mostly_black = right_black_ratio > black_border_ratio_threshold
 
-    # --- Final logic ---
-    # 1) If the left border OR the right border is entirely black => do not merge
-    if left_border_all_black or right_border_all_black:
+    if left_border_mostly_black or right_border_mostly_black:
         return False
-    
-    # 2) Otherwise, it's a spread only if we detected non-white pixels on both sides
-    return left_border_has_black and right_border_has_black
+
+    return left_border_has_nonwhite and right_border_has_nonwhite
 
 def merge_images_horizontally(image_path1, image_path2, output_path):
     """
-    Merges two images side by side, placing the second image on the left and the first image on the right.
-    The function aligns the top and bottom edges en se basant sur l'image la plus grande (en hauteur).
+    Fusionne deux images côte à côte en alignant leur haut et leur bas selon l'image la plus grande.
     Si l'une des images est plus petite, elle est redimensionnée proportionnellement.
+    L'image issue de image_path2 sera à gauche et celle de image_path1 à droite.
     """
     img1 = Image.open(image_path1).convert('RGB')
     img2 = Image.open(image_path2).convert('RGB')
     
     width1, height1 = img1.size
     width2, height2 = img2.size
-
-    # Déterminer la hauteur de référence (celle de l'image la plus grande)
     new_height = max(height1, height2)
 
-    # Redimensionner img1 si nécessaire
     if height1 != new_height:
         new_width1 = int(width1 * new_height / height1)
         img1 = img1.resize((new_width1, new_height), Image.Resampling.LANCZOS)
     else:
         new_width1 = width1
 
-    # Redimensionner img2 si nécessaire
     if height2 != new_height:
         new_width2 = int(width2 * new_height / height2)
         img2 = img2.resize((new_width2, new_height), Image.Resampling.LANCZOS)
     else:
         new_width2 = width2
 
-    # La nouvelle largeur est la somme des largeurs redimensionnées
     new_width = new_width1 + new_width2
-
-    # Créer une nouvelle image avec un fond blanc
     new_img = Image.new('RGB', (new_width, new_height), color=(255, 255, 255))
-    new_img.paste(img2, (0, 0))            # L'image suivante à gauche
-    new_img.paste(img1, (new_width2, 0))     # L'image courante à droite
-
+    new_img.paste(img2, (0, 0))
+    new_img.paste(img1, (new_width2, 0))
     new_img.save(output_path)
 
 def process_folder_of_images(image_files, output_folder):
     """
-    Processes images in order and merges consecutive pages identified as double-page spreads.
-    - Merged images are named after the first page of the pair.
-    - Skips the next page once merged.
-    - Saves the result in output_folder.
-    - Returns the list of processed (final) files in the new order.
+    Traite la liste des images et fusionne les pages consécutives identifiées comme spreads.
+    - Les images fusionnées conservent le nom de la première image du couple.
+    - Les pages fusionnées ne sont pas retraitées.
+    - Le résultat est sauvegardé dans output_folder.
     """
     os.makedirs(output_folder, exist_ok=True)
-    
     i = 0
     total_images = len(image_files)
     output_files = []
@@ -138,38 +116,25 @@ def process_folder_of_images(image_files, output_folder):
         print(f"[INFO] Processing page: {current_image}")
         
         if i < total_images - 1:
-            # Look at the next page
             next_image = image_files[i+1]
-            
-            # Check both the current page and the next one
             current_is_spread = is_spread_candidate(current_image)
             next_is_spread = is_spread_candidate(next_image)
             
             if current_is_spread and next_is_spread:
-                # Spread detected: merge them
                 merged_filename = f"{base_name}.jpg"
                 merged_path = os.path.join(output_folder, merged_filename)
-                
-                print(f"[INFO] => Spread detected between "
-                      f"{os.path.basename(current_image)} and {os.path.basename(next_image)}. Merging...")
-                
+                print(f"[INFO] => Spread detected between {os.path.basename(current_image)} and {os.path.basename(next_image)}. Merging...")
                 merge_images_horizontally(current_image, next_image, merged_path)
-                
                 print(f"[INFO] => Merge complete: {merged_path}")
-
                 output_files.append(merged_path)
-                
-                # Skip the next page
                 i += 2
                 continue
             else:
-                # Not a spread, just copy the image
                 output_path = os.path.join(output_folder, os.path.basename(current_image))
                 Image.open(current_image).save(output_path)
                 output_files.append(output_path)
                 i += 1
         else:
-            # Last image, no comparison possible
             output_path = os.path.join(output_folder, os.path.basename(current_image))
             Image.open(current_image).save(output_path)
             output_files.append(output_path)
@@ -179,8 +144,7 @@ def process_folder_of_images(image_files, output_folder):
 
 def create_cbz_from_folder(folder_path, cbz_output_path):
     """
-    Creates a ZIP file (renamed to .cbz) from all the image files in 'folder_path'.
-    Compresses any images (jpg, png, etc.), preserving the same folder structure.
+    Crée un fichier ZIP (renommé en .cbz) à partir de toutes les images dans folder_path.
     """
     files_to_add = []
     for root, dirs, files in os.walk(folder_path):
@@ -196,79 +160,70 @@ def create_cbz_from_folder(folder_path, cbz_output_path):
 
 def process_one_cbz(cbz_path, temp_folder):
     """
-    Processes a single CBZ file:
-    - Extracts to a temporary folder.
-    - Detects/fuses double-page spreads (unless the border is fully black).
-    - Recreates a CBZ (suffix '_fused') in the same directory as cbz_path.
+    Traite un fichier CBZ :
+    - Extraction dans un dossier temporaire.
+    - Détection et fusion des spreads.
+    - Recréation d'un CBZ (suffixé _fused) dans le même répertoire que le CBZ d'origine.
     """
     base_name = os.path.splitext(os.path.basename(cbz_path))[0]
     parent_dir = os.path.dirname(cbz_path)
-
-    # Extraction folder for this CBZ
     extract_folder = os.path.join(temp_folder, base_name + "_extract")
-    # Folder where we save final images
     output_folder = os.path.join(temp_folder, base_name + "_fused_images")
 
-    # 1) Extraction
     print(f"\n[INFO] Extracting CBZ: {cbz_path}")
     os.makedirs(extract_folder, exist_ok=True)
     image_files = extract_cbz(cbz_path, extract_folder)
-    
     print(f"[INFO] {len(image_files)} images extracted.")
 
-    # 2) Merging
     print("[INFO] Starting detection/fusion of spreads...")
     fused_files = process_folder_of_images(image_files, output_folder)
     print("[INFO] Fusion complete.")
 
-    # 3) Rebuild the .cbz from the final images
     fused_cbz_name = base_name + "_fused.cbz"
     fused_cbz_path = os.path.join(parent_dir, fused_cbz_name)
-
     print(f"[INFO] Creating new CBZ: {fused_cbz_path}")
     create_cbz_from_folder(output_folder, fused_cbz_path)
     print("[INFO] New CBZ created successfully.")
 
-    # 4) (Optional) Cleanup of temporary folders
+    # Optionnel : nettoyage des dossiers temporaires
     # import shutil
     # shutil.rmtree(extract_folder)
     # shutil.rmtree(output_folder)
 
 def main():
     """
-    Usage: python spread_fuse.py /path/to/folder
-    - Scans all .cbz files in the folder.
-    - For each file, creates <file>_fused.cbz by merging double-page spreads.
-    - Does NOT merge if the left/right border is entirely black.
+    Utilisation :
+      - Pour traiter un dossier : python spread_fuse.py /chemin/vers/dossier
+      - Pour traiter un fichier CBZ unique : python spread_fuse.py /chemin/vers/fichier.cbz
+
+    Le script scanne l'entrée et si c'est un dossier, il traite tous les .cbz qu'il contient.
     """
     if len(sys.argv) < 2:
-        print("Usage: python spread_fuse.py /path/to/folder")
+        print("Usage: python spread_fuse.py /chemin/vers/dossier_ou_fichier.cbz")
         sys.exit(1)
     
-    input_folder = sys.argv[1]
-    
-    # Verify that it's a valid folder
-    if not os.path.isdir(input_folder):
-        print(f"[ERROR] '{input_folder}' is not a valid folder.")
+    input_path = sys.argv[1]
+
+    # Création d'un dossier temporaire dans le même répertoire que l'entrée
+    if os.path.isfile(input_path) and input_path.lower().endswith(".cbz"):
+        temp_folder = os.path.join(os.path.dirname(input_path), "temp_spread_fuse")
+        os.makedirs(temp_folder, exist_ok=True)
+        process_one_cbz(input_path, temp_folder)
+    elif os.path.isdir(input_path):
+        temp_folder = os.path.join(input_path, "temp_spread_fuse")
+        os.makedirs(temp_folder, exist_ok=True)
+        cbz_files = [f for f in os.listdir(input_path) if f.lower().endswith(".cbz")]
+        if not cbz_files:
+            print("[INFO] Aucun fichier .cbz trouvé dans le dossier.")
+            sys.exit(0)
+        for cbz_file in cbz_files:
+            cbz_path = os.path.join(input_path, cbz_file)
+            process_one_cbz(cbz_path, temp_folder)
+    else:
+        print("[ERROR] L'argument doit être un dossier ou un fichier .cbz")
         sys.exit(1)
 
-    # Create a temporary folder
-    temp_folder = os.path.join(input_folder, "temp_spread_fuse")
-    if not os.path.exists(temp_folder):
-        os.makedirs(temp_folder)
-
-    # List all .cbz in the folder
-    cbz_files = [f for f in os.listdir(input_folder) if f.lower().endswith(".cbz")]
-    
-    if not cbz_files:
-        print("[INFO] No .cbz files found in the folder.")
-        sys.exit(0)
-
-    for cbz_file in cbz_files:
-        cbz_path = os.path.join(input_folder, cbz_file)
-        process_one_cbz(cbz_path, temp_folder)
-
-    print("\n[INFO] All .cbz files have been processed.")
+    print("\n[INFO] Traitement terminé.")
 
 if __name__ == "__main__":
     main()
