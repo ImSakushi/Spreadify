@@ -80,18 +80,41 @@ def is_spread_candidate(image_path, border_size=5, white_threshold=250, black_th
 
 def merge_images_horizontally(image_path1, image_path2, output_path):
     """
-    Merges two images (same size) side by side,
-    placing the second image on the left and the first image on the right (inversion).
+    Merges two images side by side, placing the second image on the left and the first image on the right.
+    The function aligns the top and bottom edges en se basant sur l'image la plus grande (en hauteur).
+    Si l'une des images est plus petite, elle est redimensionnée proportionnellement.
     """
     img1 = Image.open(image_path1).convert('RGB')
     img2 = Image.open(image_path2).convert('RGB')
     
-    width, height = img1.size
+    width1, height1 = img1.size
+    width2, height2 = img2.size
 
-    # Create a new image with double width
-    new_img = Image.new('RGB', (width * 2, height), color=(255, 255, 255))
-    new_img.paste(img2, (0, 0))       # next_image on the left
-    new_img.paste(img1, (width, 0))   # current_image on the right
+    # Déterminer la hauteur de référence (celle de l'image la plus grande)
+    new_height = max(height1, height2)
+
+    # Redimensionner img1 si nécessaire
+    if height1 != new_height:
+        new_width1 = int(width1 * new_height / height1)
+        img1 = img1.resize((new_width1, new_height), Image.Resampling.LANCZOS)
+    else:
+        new_width1 = width1
+
+    # Redimensionner img2 si nécessaire
+    if height2 != new_height:
+        new_width2 = int(width2 * new_height / height2)
+        img2 = img2.resize((new_width2, new_height), Image.Resampling.LANCZOS)
+    else:
+        new_width2 = width2
+
+    # La nouvelle largeur est la somme des largeurs redimensionnées
+    new_width = new_width1 + new_width2
+
+    # Créer une nouvelle image avec un fond blanc
+    new_img = Image.new('RGB', (new_width, new_height), color=(255, 255, 255))
+    new_img.paste(img2, (0, 0))            # L'image suivante à gauche
+    new_img.paste(img1, (new_width2, 0))     # L'image courante à droite
+
     new_img.save(output_path)
 
 def process_folder_of_images(image_files, output_folder):
