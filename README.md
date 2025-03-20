@@ -1,4 +1,4 @@
-# CBZ Spread Fuser
+# Mangas CBZ Spread Fuser
 
 A Python script that processes CBZ (Comic Book ZIP) files by:
 1. Extracting images.
