@@ -20,7 +20,7 @@ def extract_cbz(cbz_path, extract_folder):
     extracted_files.sort()
     return extracted_files
 
-def is_spread_candidate(image_path, border_size=5, white_threshold=250, black_threshold=20, black_border_ratio_threshold=0.45):
+def is_spread_candidate(image_path, border_size=5, white_threshold=250, black_threshold=20, black_border_ratio_threshold=0.35):
     """
     Détermine si une image est candidate à la fusion en vérifiant ses bords.
     Pour chaque bord (gauche et droit) :
